@@ -850,20 +850,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ratatui-counter-app"
-version = "0.1.0"
-dependencies = [
- "arboard",
- "crossterm 0.29.0",
- "derive_setters",
- "palette",
- "rand 0.9.2",
- "ratatui",
- "strum 0.27.2",
- "strum_macros 0.27.2",
-]
-
-[[package]]
 name = "redox_syscall"
 version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1025,6 +1011,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "terminal-palette"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "crossterm 0.29.0",
+ "derive_setters",
+ "palette",
+ "rand 0.9.2",
+ "ratatui",
+ "strum 0.27.2",
+ "strum_macros 0.27.2",
 ]
 
 [[package]]
