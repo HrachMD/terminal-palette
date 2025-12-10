@@ -32,7 +32,7 @@ pub const HEX_CHARS: [char; 22] = [
     '7', '8', '9',
 ];
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum CurrentPage {
     Main,
     TheorySelector,
@@ -746,7 +746,7 @@ impl Widget for &App {
         let mut main_content = MainContent::new(self.color_blocks, self.selected_block_id);
         main_content.render(main_area, buf);
 
-        let status_bar = StatusBar::default();
+        let status_bar = StatusBar::new(self.current_page);
         status_bar.render(footer_area, buf);
     }
 }
