@@ -45,6 +45,8 @@ pub enum ColorTheories {
     Complementary,
     Triad,
     Square,
+    Shadows,
+    Lights,
 }
 
 pub struct App {
@@ -161,15 +163,23 @@ impl App {
                 }
 
                 (KeyCode::Char('l'), _) => {
-                    if let Some(block) = self.color_blocks[self.selected_block_id].as_mut() {
-                        block.locked = !block.locked;
+                    if let Some(array_idx) =
+                        self.get_array_index_for_logical_position(self.selected_block_id)
+                    {
+                        if let Some(block) = self.color_blocks[array_idx].as_mut() {
+                            block.locked = !block.locked;
+                        }
                     }
                 }
 
                 (KeyCode::Char('c'), _) => {
-                    self.clipboard
-                        .set_text(self.color_blocks[self.selected_block_id].unwrap().get_hex())
-                        .unwrap();
+                    if let Some(array_idx) =
+                        self.get_array_index_for_logical_position(self.selected_block_id)
+                    {
+                        if let Some(block) = self.color_blocks[array_idx].as_ref() {
+                            self.clipboard.set_text(block.get_hex()).unwrap();
+                        }
+                    }
                 }
 
                 (KeyCode::Char(c), KeyModifiers::ALT) if ('1'..='9').contains(&c) => {
@@ -182,6 +192,8 @@ impl App {
                     ColorTheories::Complementary => self.generate_complementary(),
                     ColorTheories::Triad => self.generate_triad(),
                     ColorTheories::Square => self.generate_square(),
+                    ColorTheories::Shadows => self.generate_shades(false),
+                    ColorTheories::Lights => self.generate_shades(true),
                 },
 
                 _ => {}
@@ -228,11 +240,15 @@ impl App {
                 }
 
                 (KeyCode::Enter, _) => {
-                    if let Some(block) = self.color_blocks[self.selected_block_id].as_mut() {
-                        let (r, g, b) = hex2rgb(&self.edit_color_field);
-                        let (h, s, v) = rgb2hsv(r, g, b);
-                        block.hsv = Hsv::new(h, s, v);
-                        self.edit_color_field = String::new();
+                    if let Some(array_idx) =
+                        self.get_array_index_for_logical_position(self.selected_block_id)
+                    {
+                        if let Some(block) = self.color_blocks[array_idx].as_mut() {
+                            let (r, g, b) = hex2rgb(&self.edit_color_field);
+                            let (h, s, v) = rgb2hsv(r, g, b);
+                            block.hsv = Hsv::new(h, s, v);
+                            self.edit_color_field = String::new();
+                        }
                     }
                 }
 
@@ -432,22 +448,226 @@ impl App {
         }
     }
 
+    fn generate_shades(&mut self, to_light: bool) {
+        // Full range: 0.0 (black) to 1.0 (white) - no constraints
+        let black = 0.0;
+        let white = 1.0;
+
+        // Get base hue from locked blocks or generate
+        let locked_blocks = self.get_locked_blocks();
+        let base_hue: f32;
+
+        if !locked_blocks.is_empty() {
+            base_hue = ColorBlock::get_avg_hue(&locked_blocks);
+        } else {
+            // Generate initial random color for first block if no locks
+            if let Some(color_block) = self.color_blocks[0].as_mut() {
+                color_block.generate_random_color();
+                base_hue = color_block.hsv.hue.into_degrees();
+            } else {
+                return; // No blocks available
+            }
+        }
+
+        // Collect all existing blocks with their array positions, values, saturations, and lock status
+        // Then map them to logical positions (0, 1, 2, ...) for even distribution
+        let mut block_info: Vec<(usize, f32, f32, bool)> = Vec::new();
+        for (i, block) in self.color_blocks.iter().enumerate() {
+            if let Some(block) = block {
+                block_info.push((i, block.hsv.value, block.hsv.saturation, block.locked));
+            }
+        }
+
+        if block_info.is_empty() {
+            return;
+        }
+
+        let total_blocks = block_info.len();
+
+        // Map array positions to logical positions (0, 1, 2, ..., total_blocks-1)
+        // This ensures even distribution regardless of gaps in the array
+        let mut logical_positions: Vec<(usize, usize, f32, f32, bool)> = Vec::new();
+        for (logical_pos, (array_pos, val, sat, is_locked)) in block_info.iter().enumerate() {
+            logical_positions.push((*array_pos, logical_pos, *val, *sat, *is_locked));
+        }
+
+        // Find locked blocks and use the first one as anchor
+        let locked_info: Vec<(usize, usize, f32, f32)> = logical_positions
+            .iter()
+            .filter_map(|(array_pos, logical_pos, val, sat, is_locked)| {
+                if *is_locked {
+                    Some((*array_pos, *logical_pos, *val, *sat))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Determine anchor (first locked block, or first block if none)
+        let (_anchor_array_pos, anchor_logical_pos, anchor_val, anchor_sat) =
+            if let Some((_array_pos, logical_pos, val, sat)) = locked_info.first() {
+                (*_array_pos, *logical_pos, *val, *sat)
+            } else {
+                // No locked blocks - use first block as anchor
+                let (array_pos, logical_pos, val, sat, _) = logical_positions[0];
+                (array_pos, logical_pos, val, sat)
+            };
+
+        // Calculate dynamic step size based on total block count
+        // More blocks = smaller step (smoother transition)
+        // Fewer blocks = larger step (bigger jumps)
+
+        // Calculate how many blocks are after the anchor (including the anchor itself)
+        let blocks_after_anchor = total_blocks - anchor_logical_pos;
+
+        // Calculate progression from anchor to target
+        // For Lights: anchor -> one step below white (evenly incremented)
+        // For Shadows: anchor -> one step above black (evenly incremented)
+        let step_from_anchor = if to_light {
+            // Lights: target is one step below white
+            // Calculate step size: (white - anchor_val) divided by number of blocks after anchor
+            // This ensures even increments and last block is one step below white
+            if blocks_after_anchor > 0 {
+                (white - anchor_val) / blocks_after_anchor as f32
+            } else {
+                0.0
+            }
+        } else {
+            // Shadows: target is one step above black
+            // Calculate step size: anchor_val divided by number of blocks after anchor
+            // This ensures even increments and last block is one step above black
+            if blocks_after_anchor > 0 {
+                anchor_val / blocks_after_anchor as f32
+            } else {
+                0.0
+            }
+        };
+
+        // Calculate how many blocks are before the anchor
+        let blocks_before_anchor = anchor_logical_pos;
+
+        // Calculate step size from start to anchor (if there are blocks before)
+        let step_to_anchor = if blocks_before_anchor > 0 {
+            if to_light {
+                // For lights: start is black, anchor is somewhere above
+                (anchor_val - black) / blocks_before_anchor as f32
+            } else {
+                // For shadows: start is white, anchor is somewhere below
+                (white - anchor_val) / blocks_before_anchor as f32
+            }
+        } else {
+            0.0
+        };
+
+        // For Lights mode: calculate desaturation step (from anchor saturation to 0.0)
+        // For Shadows mode: keep saturation constant (as requested - never change)
+        let sat_step_from_anchor = if to_light && blocks_after_anchor > 1 {
+            // Lights: desaturate from anchor_sat to 0.0 (white has no saturation)
+            anchor_sat / (blocks_after_anchor - 1) as f32
+        } else {
+            0.0
+        };
+
+        let sat_step_to_anchor = if to_light && blocks_before_anchor > 0 {
+            // Lights: before anchor, increase saturation from 0.0 to anchor_sat
+            anchor_sat / blocks_before_anchor as f32
+        } else {
+            0.0
+        };
+
+        // Apply progression to all unlocked blocks
+        for (array_pos, logical_pos, _current_val, _current_sat, is_locked) in
+            logical_positions.iter()
+        {
+            if *is_locked {
+                continue; // Skip locked blocks
+            }
+
+            if let Some(color_block) = self.color_blocks[*array_pos].as_mut() {
+                // Calculate new value (brightness)
+                let new_val = if *logical_pos < anchor_logical_pos {
+                    // Before anchor: progress from start toward anchor
+                    if to_light {
+                        black + (step_to_anchor * *logical_pos as f32)
+                    } else {
+                        white - (step_to_anchor * *logical_pos as f32)
+                    }
+                } else if *logical_pos == anchor_logical_pos {
+                    // At anchor: use anchor value (shouldn't happen for unlocked, but just in case)
+                    anchor_val
+                } else {
+                    // After anchor: progress from anchor toward target
+                    let steps_after = (*logical_pos - anchor_logical_pos) as f32;
+                    if to_light {
+                        anchor_val + (step_from_anchor * steps_after)
+                    } else {
+                        anchor_val - (step_from_anchor * steps_after)
+                    }
+                };
+
+                // Clamp value to valid range [0.0, 1.0]
+                let clamped_val = new_val.clamp(black, white);
+
+                // Calculate new saturation
+                let new_sat = if to_light {
+                    // Lights mode: desaturate as we get lighter
+                    if *logical_pos < anchor_logical_pos {
+                        // Before anchor: increase saturation toward anchor
+                        (sat_step_to_anchor * *logical_pos as f32).min(anchor_sat)
+                    } else if *logical_pos == anchor_logical_pos {
+                        anchor_sat
+                    } else {
+                        // After anchor: decrease saturation toward 0.0 (white)
+                        let steps_after = (*logical_pos - anchor_logical_pos) as f32;
+                        (anchor_sat - (sat_step_from_anchor * steps_after)).max(0.0)
+                    }
+                } else {
+                    // Shadows mode: keep saturation constant (never change)
+                    anchor_sat
+                };
+
+                color_block.change_color(base_hue, new_sat, clamped_val);
+            }
+        }
+    }
+
+    fn get_existing_block_indices(&self) -> Vec<usize> {
+        self.color_blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, block)| if block.is_some() { Some(idx) } else { None })
+            .collect()
+    }
+
+    fn get_array_index_for_logical_position(&self, logical_pos: usize) -> Option<usize> {
+        let existing_blocks = self.get_existing_block_indices();
+        existing_blocks.get(logical_pos).copied()
+    }
+
     fn exit(&mut self) {
         self.exit = true;
     }
 
     fn increment_counter(&mut self) {
-        self.selected_block_id = self
-            .selected_block_id
-            .saturating_add(1)
-            .clamp(0, self.color_block_count - 1);
+        // Get actual count of existing blocks (not just count)
+        let actual_count = self.color_blocks.iter().filter(|b| b.is_some()).count();
+        if actual_count > 0 {
+            self.selected_block_id = self
+                .selected_block_id
+                .saturating_add(1)
+                .clamp(0, actual_count - 1);
+        }
     }
 
     fn decrement_counter(&mut self) {
-        self.selected_block_id = self
-            .selected_block_id
-            .saturating_sub(1)
-            .clamp(0, self.color_block_count - 1);
+        // Get actual count of existing blocks (not just count)
+        let actual_count = self.color_blocks.iter().filter(|b| b.is_some()).count();
+        if actual_count > 0 {
+            self.selected_block_id = self
+                .selected_block_id
+                .saturating_sub(1)
+                .clamp(0, actual_count - 1);
+        }
     }
 
     fn toggle_lock(&mut self, id: usize) {
@@ -464,9 +684,19 @@ impl App {
     }
 
     fn del_block(&mut self) {
-        self.color_blocks[self.selected_block_id] = None;
-        self.color_block_count -= 1;
-        self.selected_block_id = 0;
+        if let Some(array_idx) = self.get_array_index_for_logical_position(self.selected_block_id) {
+            // Delete the block
+            self.color_blocks[array_idx] = None;
+            self.color_block_count -= 1;
+
+            // Adjust selected_block_id to stay within bounds
+            let new_count = self.color_blocks.iter().filter(|b| b.is_some()).count();
+            if new_count > 0 {
+                self.selected_block_id = self.selected_block_id.min(new_count - 1);
+            } else {
+                self.selected_block_id = 0;
+            }
+        }
     }
 }
 
