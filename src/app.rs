@@ -9,7 +9,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Stylize},
-    text::{Line, Span},
+    text::Line,
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Widget},
 };
 
@@ -118,13 +118,6 @@ impl App {
                 .border_type(BorderType::Plain);
 
             frame.render_widget(block, popup_area);
-
-            // DOESNT WORK FOR SOME REASON,
-            // let par_w_blink = Paragraph::new(Line::from(vec![
-            //     Span::from(format!(" > {}", "Hello World")),
-            //     Span::from("█").add_modifier(Modifier::SLOW_BLINK),
-            // ]))
-            // .block(block);
 
             let (r, g, b) = hex2rgb(&self.edit_color_field);
 
