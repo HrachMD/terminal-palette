@@ -118,6 +118,45 @@ impl ColorBlock {
         format!("#{r:02X}{g:02X}{b:02X}")
     }
 
+    /// Calculate relative luminance using WCAG formula
+    /// Returns a value between 0.0 (black) and 1.0 (white)
+    pub fn get_relative_luminance(&self) -> f32 {
+        let (r, g, b) = self.get_rgb_values();
+
+        // Convert to linear RGB values (0.0 to 1.0)
+        let r_linear = if r as f32 / 255.0 <= 0.03928 {
+            (r as f32 / 255.0) / 12.92
+        } else {
+            ((r as f32 / 255.0 + 0.055) / 1.055).powf(2.4)
+        };
+
+        let g_linear = if g as f32 / 255.0 <= 0.03928 {
+            (g as f32 / 255.0) / 12.92
+        } else {
+            ((g as f32 / 255.0 + 0.055) / 1.055).powf(2.4)
+        };
+
+        let b_linear = if b as f32 / 255.0 <= 0.03928 {
+            (b as f32 / 255.0) / 12.92
+        } else {
+            ((b as f32 / 255.0 + 0.055) / 1.055).powf(2.4)
+        };
+
+        // Calculate relative luminance
+        0.2126 * r_linear + 0.7152 * g_linear + 0.0722 * b_linear
+    }
+
+    /// Get appropriate text color (black or white) based on background luminance
+    pub fn get_text_color(&self) -> Color {
+        let luminance = self.get_relative_luminance();
+        // Use 0.5 as threshold - above is light (use dark text), below is dark (use light text)
+        if luminance > 0.5 {
+            Color::Rgb(0, 0, 0) // Black text for light backgrounds
+        } else {
+            Color::Rgb(255, 255, 255) // White text for dark backgrounds
+        }
+    }
+
     pub fn get_avg_hue(blocks: &Vec<Option<ColorBlock>>) -> f32 {
         let mut hue_as_deg: f32 = 0.0;
 
@@ -146,6 +185,7 @@ impl Widget for ColorBlock {
         let (red, green, blue) = self.get_rgb_values();
 
         let color = Color::Rgb(red, green, blue);
+        let text_color = self.get_text_color();
 
         if self.selected {
             padding = selected_padding;
@@ -180,9 +220,9 @@ impl Widget for ColorBlock {
         }
 
         Paragraph::new(vec![
-            Line::from(format!("HSV: {hue}, {:.2}, {:.2}", saturation, value)),
-            Line::from(format!("RGB: {red}, {green}, {blue}")),
-            Line::from(self.get_hex()),
+            Line::from(format!("HSV: {hue}, {:.2}, {:.2}", saturation, value)).fg(text_color),
+            Line::from(format!("RGB: {red}, {green}, {blue}")).fg(text_color),
+            Line::from(self.get_hex()).fg(text_color),
             Line::from(""),
         ])
         .block(block)

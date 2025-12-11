@@ -47,6 +47,7 @@ pub enum ColorTheories {
     Square,
     Shadows,
     Lights,
+    Neutrals,
 }
 
 pub struct App {
@@ -194,6 +195,7 @@ impl App {
                     ColorTheories::Square => self.generate_square(),
                     ColorTheories::Shadows => self.generate_shades(false),
                     ColorTheories::Lights => self.generate_shades(true),
+                    ColorTheories::Neutrals => self.generate_neutrals(),
                 },
 
                 _ => {}
@@ -627,6 +629,148 @@ impl App {
                 };
 
                 color_block.change_color(base_hue, new_sat, clamped_val);
+            }
+        }
+    }
+
+    fn generate_neutrals(&mut self) {
+        // Get base hue and anchor color from locked blocks or generate
+        let locked_blocks = self.get_locked_blocks();
+        let base_hue: f32;
+        let anchor_sat: f32;
+        let anchor_val: f32;
+
+        if !locked_blocks.is_empty() {
+            base_hue = ColorBlock::get_avg_hue(&locked_blocks);
+            // Use the first locked block's saturation and value as anchor
+            if let Some(Some(anchor_block)) = locked_blocks.first() {
+                let (_, sat, val) = anchor_block.get_hsv_values();
+                anchor_sat = sat;
+                anchor_val = val;
+            } else {
+                return; // Should not happen, but safety check
+            }
+        } else {
+            // Generate initial random color for first block if no locks
+            if let Some(color_block) = self.color_blocks[0].as_mut() {
+                color_block.generate_random_color();
+                let (h, s, v) = color_block.get_hsv_values();
+                base_hue = h;
+                anchor_sat = s;
+                anchor_val = v;
+            } else {
+                return; // No blocks available
+            }
+        }
+
+        // Collect all existing blocks with their array positions and lock status
+        let mut block_info: Vec<(usize, bool)> = Vec::new();
+        for (i, block) in self.color_blocks.iter().enumerate() {
+            if let Some(block) = block {
+                block_info.push((i, block.locked));
+            }
+        }
+
+        if block_info.is_empty() {
+            return;
+        }
+
+        let total_blocks = block_info.len();
+
+        // Map array positions to logical positions (0, 1, 2, ..., total_blocks-1)
+        let mut logical_positions: Vec<(usize, usize, bool)> = Vec::new();
+        for (logical_pos, (array_pos, is_locked)) in block_info.iter().enumerate() {
+            logical_positions.push((*array_pos, logical_pos, *is_locked));
+        }
+
+        // Find locked blocks and use the first one as anchor
+        let locked_info: Vec<(usize, usize)> = logical_positions
+            .iter()
+            .filter_map(|(array_pos, logical_pos, is_locked)| {
+                if *is_locked {
+                    Some((*array_pos, *logical_pos))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Determine anchor logical position (first locked block, or first block if none)
+        let anchor_logical_pos = if let Some((_, logical_pos)) = locked_info.first() {
+            *logical_pos
+        } else {
+            // No locked blocks - use first block as anchor
+            logical_positions[0].1
+        };
+
+        // Calculate desaturation progression
+        // We'll create a smooth transition from anchor saturation to 0 (fully desaturated)
+        // The anchor maintains its saturation, and other blocks desaturate progressively
+
+        // Calculate how many blocks are after the anchor (including anchor)
+        let blocks_after_anchor = total_blocks - anchor_logical_pos;
+
+        // Calculate how many blocks are before the anchor
+        let blocks_before_anchor = anchor_logical_pos;
+
+        // Desaturation step: from anchor_sat to 0.0
+        // Blocks before anchor: increase saturation from 0.0 to anchor_sat
+        // Anchor: keep anchor_sat
+        // Blocks after anchor: decrease saturation from anchor_sat to 0.0
+        let sat_step_to_anchor = if blocks_before_anchor > 0 {
+            anchor_sat / blocks_before_anchor as f32
+        } else {
+            0.0
+        };
+
+        let sat_step_from_anchor = if blocks_after_anchor > 1 {
+            anchor_sat / (blocks_after_anchor - 1) as f32
+        } else {
+            0.0
+        };
+
+        // Apply neutral progression to all unlocked blocks
+        for (array_pos, logical_pos, is_locked) in logical_positions.iter() {
+            if *is_locked {
+                continue; // Skip locked blocks
+            }
+
+            if let Some(color_block) = self.color_blocks[*array_pos].as_mut() {
+                // Calculate new saturation (desaturation progression)
+                let new_sat = if *logical_pos < anchor_logical_pos {
+                    // Before anchor: increase saturation from 0.0 toward anchor
+                    (sat_step_to_anchor * *logical_pos as f32).min(anchor_sat)
+                } else if *logical_pos == anchor_logical_pos {
+                    // At anchor: use anchor saturation (shouldn't happen for unlocked, but safety)
+                    anchor_sat
+                } else {
+                    // After anchor: decrease saturation from anchor toward 0.0
+                    let steps_after = (*logical_pos - anchor_logical_pos) as f32;
+                    (anchor_sat - (sat_step_from_anchor * steps_after)).max(0.0)
+                };
+
+                // For neutrals, we keep the value relatively stable but add slight variation
+                // for visual depth. This creates a more interesting neutral palette.
+                // Value variation: ±5% from anchor value
+                let value_variation = 0.05;
+                let value_range = (anchor_val - value_variation).max(0.0)
+                    ..=(anchor_val + value_variation).min(1.0);
+
+                // Distribute value slightly across blocks for subtle depth
+                let value_progress = if total_blocks > 1 {
+                    (*logical_pos as f32) / ((total_blocks - 1) as f32)
+                } else {
+                    0.0
+                };
+
+                // Create a subtle value curve: slightly darker in middle, lighter at edges
+                // This creates a more natural neutral palette
+                let value_offset = (value_progress - 0.5) * 2.0; // -1.0 to 1.0
+                let value_adjustment = value_offset * value_variation * 0.5; // Reduced variation
+                let new_val =
+                    (anchor_val + value_adjustment).clamp(*value_range.start(), *value_range.end());
+
+                color_block.change_color(base_hue, new_sat, new_val);
             }
         }
     }
