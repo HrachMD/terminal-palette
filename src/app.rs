@@ -45,6 +45,7 @@ pub enum ColorTheories {
     Complementary,
     Triad,
     Square,
+    Monochrome,
     Shadows,
     Lights,
     Neutrals,
@@ -193,6 +194,7 @@ impl App {
                     ColorTheories::Complementary => self.generate_complementary(),
                     ColorTheories::Triad => self.generate_triad(),
                     ColorTheories::Square => self.generate_square(),
+                    ColorTheories::Monochrome => self.generate_monochrome(),
                     ColorTheories::Shadows => self.generate_shades(false),
                     ColorTheories::Lights => self.generate_shades(true),
                     ColorTheories::Neutrals => self.generate_neutrals(),
@@ -446,6 +448,126 @@ impl App {
 
                     color_block.change_color(new_hue, new_sat, new_val);
                 }
+            }
+        }
+    }
+
+    fn generate_monochrome(&mut self) {
+        let mut rng = rand::rng();
+        let locked_blocks = self.get_locked_blocks();
+        let mut base_hue: f32 = 0.0;
+        let hue_variation = 3.0; // Minimal hue variation for true monochrome (±3 degrees)
+        let rand_rate = 2; // Very low randomness for hue to maintain monochromatic integrity
+
+        if !locked_blocks.is_empty() {
+            base_hue = ColorBlock::get_avg_hue(&locked_blocks);
+        } else {
+            // Generate initial random color for first block
+            if let Some(color_block) = self.color_blocks[0].as_mut() {
+                color_block.generate_random_color();
+                base_hue = color_block.hsv.hue.into_degrees();
+            }
+        }
+
+        // Collect all existing blocks to calculate logical positions
+        let mut block_info: Vec<(usize, bool)> = Vec::new();
+        for (i, block) in self.color_blocks.iter().enumerate() {
+            if let Some(_block) = block {
+                block_info.push((i, _block.locked));
+            }
+        }
+
+        if block_info.is_empty() {
+            return;
+        }
+
+        let total_blocks = block_info.len();
+
+        // Map array positions to logical positions (0, 1, 2, ..., total_blocks-1)
+        let mut logical_positions: Vec<(usize, usize, bool)> = Vec::new();
+        for (logical_pos, (array_pos, is_locked)) in block_info.iter().enumerate() {
+            logical_positions.push((*array_pos, logical_pos, *is_locked));
+        }
+
+        // Get anchor saturation and value from locked blocks or first block
+        let (anchor_sat, anchor_val) = if !locked_blocks.is_empty() {
+            if let Some(Some(anchor_block)) = locked_blocks.first() {
+                let (_, sat, val) = anchor_block.get_hsv_values();
+                (sat, val)
+            } else {
+                (0.6, 0.6) // Default fallback
+            }
+        } else {
+            if let Some(color_block) = self.color_blocks[0].as_ref() {
+                let (_, sat, val) = color_block.get_hsv_values();
+                (sat, val)
+            } else {
+                (0.6, 0.6) // Default fallback
+            }
+        };
+
+        // For monochrome, we create variations in both saturation and brightness
+        // This creates tints (lighter), tones (muted), and shades (darker)
+        // Saturation range: from low (0.1) to high (0.9)
+        // Brightness range: from low (0.2) to high (0.9)
+
+        let sat_range_start = 0.1;
+        let sat_range_end = 0.9;
+        let val_range_start = 0.2;
+        let val_range_end = 0.9;
+
+        // Calculate step sizes for even distribution
+        let sat_step = if total_blocks > 1 {
+            (sat_range_end - sat_range_start) / (total_blocks - 1) as f32
+        } else {
+            0.0
+        };
+
+        let val_step = if total_blocks > 1 {
+            (val_range_end - val_range_start) / (total_blocks - 1) as f32
+        } else {
+            0.0
+        };
+
+        // Apply monochrome progression to all unlocked blocks
+        for (array_pos, logical_pos, is_locked) in logical_positions.iter() {
+            if *is_locked {
+                continue; // Skip locked blocks
+            }
+
+            if let Some(color_block) = self.color_blocks[*array_pos].as_mut() {
+                // Keep hue constant with minimal variation for true monochrome
+                let hue_randomness = rng.random_range(-rand_rate..rand_rate) as f32;
+                let new_hue = (base_hue + hue_randomness * hue_variation / 10.0) % 360.0;
+
+                // Vary saturation across the range for visual interest
+                // Create a smooth progression that doesn't necessarily follow anchor
+                let new_sat = if locked_blocks.is_empty() {
+                    // No locked blocks: distribute evenly across range
+                    sat_range_start + (sat_step * *logical_pos as f32)
+                } else {
+                    // With locked blocks: use anchor saturation as reference but still vary
+                    // Create variation around anchor while maintaining smooth progression
+                    let base_sat_progress = sat_range_start + (sat_step * *logical_pos as f32);
+                    // Blend with anchor saturation for smoother transitions
+                    (base_sat_progress * 0.7 + anchor_sat * 0.3)
+                        .clamp(sat_range_start, sat_range_end)
+                };
+
+                // Vary brightness across the range
+                // Alternate between lighter and darker for more interesting palette
+                let new_val = if locked_blocks.is_empty() {
+                    // No locked blocks: distribute evenly across range
+                    val_range_start + (val_step * *logical_pos as f32)
+                } else {
+                    // With locked blocks: use anchor value as reference but still vary
+                    let base_val_progress = val_range_start + (val_step * *logical_pos as f32);
+                    // Blend with anchor value for smoother transitions
+                    (base_val_progress * 0.7 + anchor_val * 0.3)
+                        .clamp(val_range_start, val_range_end)
+                };
+
+                color_block.change_color(new_hue, new_sat, new_val);
             }
         }
     }
