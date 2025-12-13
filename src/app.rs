@@ -44,7 +44,8 @@ pub enum ColorTheories {
     Analogous,
     Complementary,
     Triad,
-    Square,
+    Tetrad,
+    Hexad,
     Monochrome,
     Shadows,
     Lights,
@@ -193,7 +194,8 @@ impl App {
                     ColorTheories::Analogous => self.generate_analogous(),
                     ColorTheories::Complementary => self.generate_complementary(),
                     ColorTheories::Triad => self.generate_triad(),
-                    ColorTheories::Square => self.generate_square(),
+                    ColorTheories::Tetrad => self.generate_tetrad(),
+                    ColorTheories::Hexad => self.generate_hexad(),
                     ColorTheories::Monochrome => self.generate_monochrome(),
                     ColorTheories::Shadows => self.generate_shades(false),
                     ColorTheories::Lights => self.generate_shades(true),
@@ -270,50 +272,206 @@ impl App {
             .collect()
     }
 
-    fn generate_square(&mut self) {
+    fn generate_tetrad(&mut self) {
         let mut rng = rand::rng();
         let locked_blocks = self.get_locked_blocks();
         let mut base_hue: f32 = 0.0;
-        let rand_rate = 8; // Lower randomness for cleaner square relationships
+        let rand_rate = 4; // Minimal randomness for cleaner tetrad relationships
+
+        let mut base_sat: f32 = 0.68;
+        let mut base_val: f32 = 0.63;
 
         if !locked_blocks.is_empty() {
             base_hue = ColorBlock::get_avg_hue(&locked_blocks);
+            base_sat = ColorBlock::get_avg_saturation(&locked_blocks);
+            base_val = ColorBlock::get_avg_value(&locked_blocks);
         } else {
             // Generate initial random color for first block
             if let Some(color_block) = self.color_blocks[0].as_mut() {
                 color_block.generate_random_color();
                 base_hue = color_block.hsv.hue.into_degrees();
+                base_sat = color_block.hsv.saturation;
+                base_val = color_block.hsv.value;
             }
         }
 
-        for (i, block) in self.color_blocks.iter_mut().enumerate() {
-            if let Some(color_block) = block {
-                if !color_block.locked {
-                    let randomness = rng.random_range(-rand_rate..rand_rate) as f32;
+        // Collect all existing blocks to calculate logical positions
+        let mut block_info: Vec<(usize, bool)> = Vec::new();
+        for (i, block) in self.color_blocks.iter().enumerate() {
+            if let Some(_block) = block {
+                block_info.push((i, _block.locked));
+            }
+        }
 
-                    // Create square colors: base, base+90°, base+180°, base+270°
-                    let new_hue = match i % 4 {
-                        0 => (base_hue + randomness) % 360.0,         // Primary
-                        1 => (base_hue + 90.0 + randomness) % 360.0,  // First square
-                        2 => (base_hue + 180.0 + randomness) % 360.0, // Complement
-                        3 => (base_hue + 270.0 + randomness) % 360.0, // Second square
-                        _ => unreachable!(),
-                    };
+        if block_info.is_empty() {
+            return;
+        }
 
-                    let new_sat = if locked_blocks.is_empty() {
-                        rng.random_range(55..80) as f32 / 100.0 // Balanced saturation for square harmony
-                    } else {
-                        color_block.hsv.saturation
-                    };
+        // Map array positions to logical positions (0, 1, 2, ..., total_blocks-1)
+        let mut logical_positions: Vec<(usize, usize, bool)> = Vec::new();
+        for (logical_pos, (array_pos, is_locked)) in block_info.iter().enumerate() {
+            logical_positions.push((*array_pos, logical_pos, *is_locked));
+        }
 
-                    let new_val = if locked_blocks.is_empty() {
-                        rng.random_range(50..75) as f32 / 100.0
-                    } else {
-                        color_block.hsv.value
-                    };
+        let total_blocks = block_info.len();
 
-                    color_block.change_color(new_hue, new_sat, new_val);
-                }
+        // Determine how many base colors we have (4 for tetrad)
+        let base_colors = 4;
+        let colors_per_group = (total_blocks + base_colors - 1) / base_colors; // Round up division
+
+        for (array_pos, logical_pos, is_locked) in logical_positions.iter() {
+            if *is_locked {
+                continue; // Skip locked blocks
+            }
+
+            if let Some(color_block) = self.color_blocks[*array_pos].as_mut() {
+                let randomness = rng.random_range(-rand_rate..rand_rate) as f32;
+
+                // Determine which base color group (0, 1, 2, or 3 for tetrad)
+                let color_group = *logical_pos % base_colors;
+                let variation_index = *logical_pos / base_colors;
+
+                // Calculate base hue for this group
+                let group_base_hue = match color_group {
+                    0 => base_hue,
+                    1 => (base_hue + 90.0) % 360.0,
+                    2 => (base_hue + 180.0) % 360.0,
+                    3 => (base_hue + 270.0) % 360.0,
+                    _ => unreachable!(),
+                };
+
+                // Create variations within each color group
+                let variation_factor = if colors_per_group > 1 {
+                    (variation_index as f32) / (colors_per_group - 1) as f32 // 0.0 to 1.0
+                } else {
+                    0.5
+                };
+
+                let new_hue = (group_base_hue + randomness) % 360.0;
+
+                // Vary saturation and value to create distinct variations within each group
+                let sat_variation_range = if !locked_blocks.is_empty() {
+                    0.12 // Moderate variation when locked color exists
+                } else {
+                    0.16 // More variation when no locked color
+                };
+                let val_variation_range = if !locked_blocks.is_empty() {
+                    0.15 // Moderate variation when locked color exists
+                } else {
+                    0.20 // More variation when no locked color
+                };
+
+                // Create variation: center around base, spread based on variation_index
+                let sat_offset = (variation_factor - 0.5) * sat_variation_range * 2.0;
+                let val_offset = (variation_factor - 0.5) * val_variation_range * 2.0;
+
+                let new_sat = (base_sat + sat_offset).clamp(0.0, 1.0);
+                let new_val = (base_val + val_offset).clamp(0.0, 1.0);
+
+                color_block.change_color(new_hue, new_sat, new_val);
+            }
+        }
+    }
+
+    fn generate_hexad(&mut self) {
+        let mut rng = rand::rng();
+        let locked_blocks = self.get_locked_blocks();
+        let mut base_hue: f32 = 0.0;
+        let rand_rate = 4; // Minimal randomness for cleaner hexad relationships
+
+        let mut base_sat: f32 = 0.65;
+        let mut base_val: f32 = 0.60;
+
+        if !locked_blocks.is_empty() {
+            base_hue = ColorBlock::get_avg_hue(&locked_blocks);
+            base_sat = ColorBlock::get_avg_saturation(&locked_blocks);
+            base_val = ColorBlock::get_avg_value(&locked_blocks);
+        } else {
+            // Generate initial random color for first block
+            if let Some(color_block) = self.color_blocks[0].as_mut() {
+                color_block.generate_random_color();
+                base_hue = color_block.hsv.hue.into_degrees();
+                base_sat = color_block.hsv.saturation;
+                base_val = color_block.hsv.value;
+            }
+        }
+
+        // Collect all existing blocks to calculate logical positions
+        let mut block_info: Vec<(usize, bool)> = Vec::new();
+        for (i, block) in self.color_blocks.iter().enumerate() {
+            if let Some(_block) = block {
+                block_info.push((i, _block.locked));
+            }
+        }
+
+        if block_info.is_empty() {
+            return;
+        }
+
+        // Map array positions to logical positions (0, 1, 2, ..., total_blocks-1)
+        let mut logical_positions: Vec<(usize, usize, bool)> = Vec::new();
+        for (logical_pos, (array_pos, is_locked)) in block_info.iter().enumerate() {
+            logical_positions.push((*array_pos, logical_pos, *is_locked));
+        }
+
+        let total_blocks = block_info.len();
+
+        // Determine how many base colors we have (6 for hexad)
+        let base_colors = 6;
+        let colors_per_group = (total_blocks + base_colors - 1) / base_colors; // Round up division
+
+        for (array_pos, logical_pos, is_locked) in logical_positions.iter() {
+            if *is_locked {
+                continue; // Skip locked blocks
+            }
+
+            if let Some(color_block) = self.color_blocks[*array_pos].as_mut() {
+                let randomness = rng.random_range(-rand_rate..rand_rate) as f32;
+
+                // Determine which base color group (0-5 for hexad)
+                let color_group = *logical_pos % base_colors;
+                let variation_index = *logical_pos / base_colors;
+
+                // Calculate base hue for this group
+                let group_base_hue = match color_group {
+                    0 => base_hue,
+                    1 => (base_hue + 60.0) % 360.0,
+                    2 => (base_hue + 120.0) % 360.0,
+                    3 => (base_hue + 180.0) % 360.0,
+                    4 => (base_hue + 240.0) % 360.0,
+                    5 => (base_hue + 300.0) % 360.0,
+                    _ => unreachable!(),
+                };
+
+                // Create variations within each color group (if more blocks than base colors)
+                let variation_factor = if colors_per_group > 1 {
+                    (variation_index as f32) / (colors_per_group - 1) as f32 // 0.0 to 1.0
+                } else {
+                    0.5
+                };
+
+                let new_hue = (group_base_hue + randomness) % 360.0;
+
+                // Vary saturation and value to create distinct variations within each group
+                let sat_variation_range = if !locked_blocks.is_empty() {
+                    0.10 // Moderate variation when locked color exists
+                } else {
+                    0.14 // More variation when no locked color
+                };
+                let val_variation_range = if !locked_blocks.is_empty() {
+                    0.12 // Moderate variation when locked color exists
+                } else {
+                    0.18 // More variation when no locked color
+                };
+
+                // Create variation: center around base, spread based on variation_index
+                let sat_offset = (variation_factor - 0.5) * sat_variation_range * 2.0;
+                let val_offset = (variation_factor - 0.5) * val_variation_range * 2.0;
+
+                let new_sat = (base_sat + sat_offset).clamp(0.0, 1.0);
+                let new_val = (base_val + val_offset).clamp(0.0, 1.0);
+
+                color_block.change_color(new_hue, new_sat, new_val);
             }
         }
     }
@@ -322,45 +480,100 @@ impl App {
         let mut rng = rand::rng();
         let locked_blocks = self.get_locked_blocks();
         let mut base_hue: f32 = 0.0;
-        let rand_rate = 8; // Lower randomness for cleaner triadic relationships
+        let rand_rate = 4; // Minimal randomness for cleaner triadic relationships
+
+        let mut base_sat: f32 = 0.72;
+        let mut base_val: f32 = 0.68;
 
         if !locked_blocks.is_empty() {
             base_hue = ColorBlock::get_avg_hue(&locked_blocks);
+            base_sat = ColorBlock::get_avg_saturation(&locked_blocks);
+            base_val = ColorBlock::get_avg_value(&locked_blocks);
         } else {
             // Generate initial random color for first block
             if let Some(color_block) = self.color_blocks[0].as_mut() {
                 color_block.generate_random_color();
                 base_hue = color_block.hsv.hue.into_degrees();
+                base_sat = color_block.hsv.saturation;
+                base_val = color_block.hsv.value;
             }
         }
 
-        for (i, block) in self.color_blocks.iter_mut().enumerate() {
-            if let Some(color_block) = block {
-                if !color_block.locked {
-                    let randomness = rng.random_range(-rand_rate..rand_rate) as f32;
+        // Collect all existing blocks to calculate logical positions
+        let mut block_info: Vec<(usize, bool)> = Vec::new();
+        for (i, block) in self.color_blocks.iter().enumerate() {
+            if let Some(_block) = block {
+                block_info.push((i, _block.locked));
+            }
+        }
 
-                    // Create triadic colors: base, base+120°, base+240°
-                    let new_hue = match i % 3 {
-                        0 => (base_hue + randomness) % 360.0,         // Primary
-                        1 => (base_hue + 120.0 + randomness) % 360.0, // First triad
-                        2 => (base_hue + 240.0 + randomness) % 360.0, // Second triad
-                        _ => unreachable!(),
-                    };
+        if block_info.is_empty() {
+            return;
+        }
 
-                    let new_sat = if locked_blocks.is_empty() {
-                        rng.random_range(60..85) as f32 / 100.0 // Slightly higher saturation for vibrant triads
-                    } else {
-                        color_block.hsv.saturation
-                    };
+        // Map array positions to logical positions (0, 1, 2, ..., total_blocks-1)
+        let mut logical_positions: Vec<(usize, usize, bool)> = Vec::new();
+        for (logical_pos, (array_pos, is_locked)) in block_info.iter().enumerate() {
+            logical_positions.push((*array_pos, logical_pos, *is_locked));
+        }
 
-                    let new_val = if locked_blocks.is_empty() {
-                        rng.random_range(55..80) as f32 / 100.0
-                    } else {
-                        color_block.hsv.value
-                    };
+        let total_blocks = block_info.len();
 
-                    color_block.change_color(new_hue, new_sat, new_val);
-                }
+        // Determine how many base colors we have (3 for triadic)
+        let base_colors = 3;
+        let colors_per_group = (total_blocks + base_colors - 1) / base_colors; // Round up division
+
+        for (array_pos, logical_pos, is_locked) in logical_positions.iter() {
+            if *is_locked {
+                continue; // Skip locked blocks
+            }
+
+            if let Some(color_block) = self.color_blocks[*array_pos].as_mut() {
+                let randomness = rng.random_range(-rand_rate..rand_rate) as f32;
+
+                // Determine which base color group (0, 1, or 2 for triadic)
+                let color_group = *logical_pos % base_colors;
+                let variation_index = *logical_pos / base_colors;
+
+                // Calculate base hue for this group
+                let group_base_hue = match color_group {
+                    0 => base_hue,
+                    1 => (base_hue + 120.0) % 360.0,
+                    2 => (base_hue + 240.0) % 360.0,
+                    _ => unreachable!(),
+                };
+
+                // Create variations within each color group
+                // Variation index determines how much to vary saturation/value
+                let variation_factor = if colors_per_group > 1 {
+                    (variation_index as f32) / (colors_per_group - 1) as f32 // 0.0 to 1.0
+                } else {
+                    0.5
+                };
+
+                let new_hue = (group_base_hue + randomness) % 360.0;
+
+                // Vary saturation and value to create distinct variations within each group
+                // Create a progression: lighter/darker or more/less saturated variations
+                let sat_variation_range = if !locked_blocks.is_empty() {
+                    0.12 // Moderate variation when locked color exists
+                } else {
+                    0.18 // More variation when no locked color
+                };
+                let val_variation_range = if !locked_blocks.is_empty() {
+                    0.15 // Moderate variation when locked color exists
+                } else {
+                    0.22 // More variation when no locked color
+                };
+
+                // Create variation: center around base, spread based on variation_index
+                let sat_offset = (variation_factor - 0.5) * sat_variation_range * 2.0; // -range to +range
+                let val_offset = (variation_factor - 0.5) * val_variation_range * 2.0; // -range to +range
+
+                let new_sat = (base_sat + sat_offset).clamp(0.0, 1.0);
+                let new_val = (base_val + val_offset).clamp(0.0, 1.0);
+
+                color_block.change_color(new_hue, new_sat, new_val);
             }
         }
     }
@@ -369,44 +582,99 @@ impl App {
         let mut rng = rand::rng();
         let locked_blocks = self.get_locked_blocks();
         let mut base_hue: f32 = 0.0;
-        let rand_rate = 15;
+        let rand_rate = 4; // Minimal randomness for cleaner complementary relationships
+
+        let mut base_sat: f32 = 0.70;
+        let mut base_val: f32 = 0.65;
 
         if !locked_blocks.is_empty() {
             base_hue = ColorBlock::get_avg_hue(&locked_blocks);
+            base_sat = ColorBlock::get_avg_saturation(&locked_blocks);
+            base_val = ColorBlock::get_avg_value(&locked_blocks);
         } else {
             // Generate initial random color for first block
             if let Some(color_block) = self.color_blocks[0].as_mut() {
                 color_block.generate_random_color();
                 base_hue = color_block.hsv.hue.into_degrees();
+                base_sat = color_block.hsv.saturation;
+                base_val = color_block.hsv.value;
             }
         }
 
-        for (i, block) in self.color_blocks.iter_mut().enumerate() {
-            if let Some(color_block) = block {
-                if !color_block.locked {
-                    let randomness = rng.random_range(-rand_rate..rand_rate) as f32;
+        // Collect all existing blocks to calculate logical positions
+        let mut block_info: Vec<(usize, bool)> = Vec::new();
+        for (i, block) in self.color_blocks.iter().enumerate() {
+            if let Some(_block) = block {
+                block_info.push((i, _block.locked));
+            }
+        }
 
-                    // Alternate between base hue and its complement
-                    let new_hue = if i % 2 == 0 {
-                        (base_hue + randomness) % 360.0
-                    } else {
-                        (base_hue + 180.0 + randomness) % 360.0
-                    };
+        if block_info.is_empty() {
+            return;
+        }
 
-                    let new_sat = if locked_blocks.is_empty() {
-                        rng.random_range(50..80) as f32 / 100.0
-                    } else {
-                        color_block.hsv.saturation
-                    };
+        // Map array positions to logical positions (0, 1, 2, ..., total_blocks-1)
+        let mut logical_positions: Vec<(usize, usize, bool)> = Vec::new();
+        for (logical_pos, (array_pos, is_locked)) in block_info.iter().enumerate() {
+            logical_positions.push((*array_pos, logical_pos, *is_locked));
+        }
 
-                    let new_val = if locked_blocks.is_empty() {
-                        rng.random_range(50..80) as f32 / 100.0
-                    } else {
-                        color_block.hsv.value
-                    };
+        let total_blocks = block_info.len();
 
-                    color_block.change_color(new_hue, new_sat, new_val);
-                }
+        // Determine how many base colors we have (2 for complementary)
+        let base_colors = 2;
+        let colors_per_group = (total_blocks + base_colors - 1) / base_colors; // Round up division
+
+        for (array_pos, logical_pos, is_locked) in logical_positions.iter() {
+            if *is_locked {
+                continue; // Skip locked blocks
+            }
+
+            if let Some(color_block) = self.color_blocks[*array_pos].as_mut() {
+                let randomness = rng.random_range(-rand_rate..rand_rate) as f32;
+
+                // Determine which base color group (0 = base, 1 = complement)
+                let color_group = *logical_pos % base_colors;
+                let variation_index = *logical_pos / base_colors;
+
+                // Calculate base hue for this group
+                let group_base_hue = if color_group == 0 {
+                    base_hue
+                } else {
+                    (base_hue + 180.0) % 360.0
+                };
+
+                // Create variations within each color group
+                // Variation index determines how much to vary saturation/value
+                let variation_factor = if colors_per_group > 1 {
+                    (variation_index as f32) / (colors_per_group - 1) as f32 // 0.0 to 1.0
+                } else {
+                    0.5
+                };
+
+                let new_hue = (group_base_hue + randomness) % 360.0;
+
+                // Vary saturation and value to create distinct variations within each group
+                // Create a progression: lighter/darker or more/less saturated variations
+                let sat_variation_range = if !locked_blocks.is_empty() {
+                    0.12 // Moderate variation when locked color exists
+                } else {
+                    0.18 // More variation when no locked color
+                };
+                let val_variation_range = if !locked_blocks.is_empty() {
+                    0.15 // Moderate variation when locked color exists
+                } else {
+                    0.22 // More variation when no locked color
+                };
+
+                // Create variation: center around base, spread based on variation_index
+                let sat_offset = (variation_factor - 0.5) * sat_variation_range * 2.0; // -range to +range
+                let val_offset = (variation_factor - 0.5) * val_variation_range * 2.0; // -range to +range
+
+                let new_sat = (base_sat + sat_offset).clamp(0.0, 1.0);
+                let new_val = (base_val + val_offset).clamp(0.0, 1.0);
+
+                color_block.change_color(new_hue, new_sat, new_val);
             }
         }
     }
@@ -415,39 +683,103 @@ impl App {
         let mut rng = rand::rng();
         let locked_blocks = self.get_locked_blocks();
         let mut base_hue: f32 = 0.0;
-        let hue_step = 30.0; // standard analogous step
-        let rand_rate = 10;
+        let mut base_sat: f32 = 0.65;
+        let mut base_val: f32 = 0.65;
+        let rand_rate = 3; // Minimal randomness for cleaner analogous relationships
 
         if !locked_blocks.is_empty() {
             base_hue = ColorBlock::get_avg_hue(&locked_blocks);
+            base_sat = ColorBlock::get_avg_saturation(&locked_blocks);
+            base_val = ColorBlock::get_avg_value(&locked_blocks);
         } else {
             // generate initial random color for first block
             if let Some(color_block) = self.color_blocks[0].as_mut() {
                 color_block.generate_random_color();
                 base_hue = color_block.hsv.hue.into_degrees();
+                base_sat = color_block.hsv.saturation;
+                base_val = color_block.hsv.value;
             }
         }
 
-        for (i, block) in self.color_blocks.iter_mut().enumerate() {
-            if let Some(color_block) = block {
-                if !color_block.locked {
-                    let randomness = rng.random_range(-rand_rate..rand_rate) as f32;
-                    let new_hue = (base_hue + (i as f32 * hue_step) + randomness) % 360.0;
+        // Collect all existing blocks to calculate logical positions
+        let mut block_info: Vec<(usize, bool)> = Vec::new();
+        for (i, block) in self.color_blocks.iter().enumerate() {
+            if let Some(_block) = block {
+                block_info.push((i, _block.locked));
+            }
+        }
 
-                    let new_sat = if locked_blocks.is_empty() {
-                        rng.random_range(50..80) as f32 / 100.0
-                    } else {
-                        color_block.hsv.saturation
-                    };
+        if block_info.is_empty() {
+            return;
+        }
 
-                    let new_val = if locked_blocks.is_empty() {
-                        rng.random_range(50..80) as f32 / 100.0
-                    } else {
-                        color_block.hsv.value
-                    };
+        let total_blocks = block_info.len();
 
-                    color_block.change_color(new_hue, new_sat, new_val);
-                }
+        // Map array positions to logical positions (0, 1, 2, ..., total_blocks-1)
+        let mut logical_positions: Vec<(usize, usize, bool)> = Vec::new();
+        for (logical_pos, (array_pos, is_locked)) in block_info.iter().enumerate() {
+            logical_positions.push((*array_pos, logical_pos, *is_locked));
+        }
+
+        // Best practice: analogous colors should stay within a reasonable range
+        // to maintain true analogous harmony while having noticeable differences
+        // Professional tools like palettegenerator.com distribute colors bidirectionally
+        // Use a fixed step size for consistent, noticeable differences between colors
+        let step_size = 10.0; // Fixed 10° step for clear, noticeable differences
+
+        // Find the locked block's logical position to use as center (if any)
+        let center_logical_pos = logical_positions
+            .iter()
+            .find(|(_, _, is_locked)| *is_locked)
+            .map(|(_, logical_pos, _)| *logical_pos)
+            .unwrap_or(total_blocks / 2); // Use middle if no locked block
+
+        for (array_pos, logical_pos, is_locked) in logical_positions.iter() {
+            if *is_locked {
+                continue; // Skip locked blocks
+            }
+
+            if let Some(color_block) = self.color_blocks[*array_pos].as_mut() {
+                let randomness = rng.random_range(-rand_rate..rand_rate) as f32;
+
+                // Distribute colors bidirectionally around base hue
+                // Colors before center go negative, colors after go positive
+                let offset = if *logical_pos < center_logical_pos {
+                    // Before center: negative offset
+                    let diff = (center_logical_pos - *logical_pos) as f32;
+                    -(diff * step_size)
+                } else if *logical_pos > center_logical_pos {
+                    // After center: positive offset
+                    let diff = (*logical_pos - center_logical_pos) as f32;
+                    diff * step_size
+                } else {
+                    // At center (shouldn't happen for unlocked, but safety)
+                    0.0
+                };
+                let new_hue = ((base_hue + offset + randomness) % 360.0 + 360.0) % 360.0;
+
+                // Vary saturation and value very slightly for visual interest while maintaining harmony
+                // Analogous colors should stay very close to the base color's characteristics
+                // Use locked blocks' saturation/value as base when available
+                let sat_variation = if !locked_blocks.is_empty() {
+                    0.05 // Very small variation when locked color exists (±5%)
+                } else {
+                    0.10 // Slightly more variation when no locked color (±10%)
+                };
+                let val_variation = if !locked_blocks.is_empty() {
+                    0.05 // Very small variation when locked color exists (±5%)
+                } else {
+                    0.10 // Slightly more variation when no locked color (±10%)
+                };
+
+                let new_sat = (base_sat
+                    + rng.random_range(-sat_variation..sat_variation) as f32 / 100.0)
+                    .clamp(0.0, 1.0);
+                let new_val = (base_val
+                    + rng.random_range(-val_variation..val_variation) as f32 / 100.0)
+                    .clamp(0.0, 1.0);
+
+                color_block.change_color(new_hue, new_sat, new_val);
             }
         }
     }

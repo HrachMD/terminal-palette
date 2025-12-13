@@ -169,6 +169,28 @@ impl ColorBlock {
         //return
         hue_as_deg / blocks.len() as f32
     }
+
+    pub fn get_avg_saturation(blocks: &Vec<Option<ColorBlock>>) -> f32 {
+        let mut total_sat: f32 = 0.0;
+
+        for block in blocks.iter() {
+            let block = block.unwrap();
+            total_sat += block.hsv.saturation;
+        }
+
+        total_sat / blocks.len() as f32
+    }
+
+    pub fn get_avg_value(blocks: &Vec<Option<ColorBlock>>) -> f32 {
+        let mut total_val: f32 = 0.0;
+
+        for block in blocks.iter() {
+            let block = block.unwrap();
+            total_val += block.hsv.value;
+        }
+
+        total_val / blocks.len() as f32
+    }
 }
 
 impl Widget for ColorBlock {
